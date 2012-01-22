@@ -11,6 +11,8 @@ import Control.Applicative hiding (many, (<|>), optional)
 import Data.Maybe
 import qualified Data.Text as T
 import Debug.Trace
+import qualified Data.Text.Lazy as LT
+import qualified Data.Text.Lazy.Encoding as LT
 
 
 from_right (Right x) = x
@@ -36,8 +38,14 @@ test_headers = BS.concat ["* 20 FETCH (UID 23 BODY[HEADER.FIELDS (to from cc bcc
                " {109}\r\nSubject: Fwd: Bet\r\nFrom: Jonathan Fischoff <jonath", 
                "angfischoff@gmail.com>\r\nTo: create@jonathanfischoff.com\r\n\r\n)\r\n"]
                
-               
-test_body = BS.concat []
+test_body = BS.concat ["* 1 FETCH (UID 27 BODY[TEXT] {35}\r\n\r\nParse this",
+    "\r\nSent from my iPhone\r\n)\r\n"]
+    
+body_parser = do
+    manyTill anyChar $ string "\r\n"
+    body <- manyTill anyChar $ try (string "\r\n)\r\n")
+    return $ (:[]) $ (:[]) $ Part "text/plain; charset=utf-8" QuotedPrintableText Nothing [] $ 
+        LT.encodeUtf8 $ LT.pack body
                
 cc_test = BSC.pack "\r\n"
 
@@ -49,7 +57,7 @@ parse_email (body_bytes, header_bytes) = result where
     result = foldl unpack_fields (Mail empty_address [] [] [] [] parts) fields
     
     
-unpack_fields mail (S subject) = update_subject mail subject
+unpack_fields mail (S subject) = mail{mailHeaders = (BSC.pack "Subject", T.pack subject):(mailHeaders mail)}
 unpack_fields mail (T to)      = mail{mailTo = to}
 unpack_fields mail (B bcc)     = mail{mailBcc = bcc}
 unpack_fields mail (C cc)      = mail{mailCc = cc}
@@ -115,7 +123,7 @@ to_parser  = many1_address_parser "To: "  T
 cc_parser  = many_address_parser  "CC: "  C
 bcc_parser = many_address_parser  "BCC: " B
 
-body_parser = error "body_parser"
+
 subject_parser = do
     string "\r\n"
     string "Subject: "
@@ -129,7 +137,13 @@ test_headers_parser = runP headers_parser () "" test_headers
 
 test_cc_parser  = runP cc_parser () "" cc_test
 
+test_body_parser = runP body_parser () "" test_body
+
 instance Show Address where
     show (Address x y) = show x ++ show y
+    
+instance Show Part where
+    show (Part x y z w u) = concat [show x,
+        show z, show w, show u]
     
     

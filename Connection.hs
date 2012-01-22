@@ -44,7 +44,7 @@ get_email_info ca_cert_filepath host port user password = do
     read_until_empty ssl
     tag' $ BS.concat ["login ", user, " ", password] 
     tag' "select \"INBOX\""  
-    search_results <- tag' "search UNSEEN" 
+    search_results <- tag' "uid search UNSEEN" 
     let uids = r search_results_parser search_results 
     
     infos <- mapM (fetch_info ssl) $ map BSC.pack uids
