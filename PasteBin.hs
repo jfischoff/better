@@ -354,6 +354,106 @@ or something similar
 
 if it is context, what is the graph and what is the 
     
+    module Service where
+
+    import BetCommands
+    import EmailConversion
+
+    import Control.Arrow                   ( second )
+    import Control.Concurrent              ( forkIO, threadDelay )
+    import Control.Exception               ( mask_ )
+    import Control.Monad                   ( when, forever )
+    import qualified Data.ByteString as B  ( ByteString, putStrLn )
+    import Data.Char                       ( isDigit )
+    import Network.HaskellNet.IMAP.Connection as I  ( IMAPConnection )
+    import Network.HaskellNet.IMAP   as I  
+    import Network.Socket            as S  ( HostName, PortNumber )
+    import System.Directory                ( canonicalizePath )
+    import System.Environment              ( getArgs )
+    import System.Exit                     ( exitFailure )
+    import System.IO                       ( Handle )
+    import System.IO.Error                 ( isDoesNotExistError )
+
+    import SSLWrap                         ( mapSSL )
+    import Network.Mail.Mime
+    import qualified Data.HashMap.Strict as H
+    import Data.Maybe
+    import Debug.Trace
+    import Control.Applicative
+    import Safe hiding (lookupJust)
+    import Data.List
+
+    type UserName = String
+    type Password = String
+    type Label = String
+
+    gmail_conf = IMAPConf
+        {
+          icHostname    = "imap.gmail.com",
+          icPort        = 993,
+          icUsername    = "default@jonathanfischoff.com",
+          icPasswd      = "Easyasabc123",
+          icSSLWrapPort = 3004
+        }
+
+    lookupJust k h = fromJustNote "lookupJust" $ H.lookup k h
+
+
+    send_email env outgoing = do 
+        mapM_ (\(x, p) -> renderSendMail $ to_email (lookupJust x env) p) outgoing 
+
+    main = do 
+        cafile <- canonicalizePath "cacert.pem"
+        _ <- mask_ $ forkIO $ mapSSL cafile 
+                (icSSLWrapPort gmail_conf) (icHostname gmail_conf) (icPort gmail_conf)
+
+        -- start imap communication
+        threadDelay$ 500*1000
+
+        processor <- start 
+        process_loop print --(processor send_email from_email')
+
+    data IMAPConf = IMAPConf 
+        { icHostname :: S.HostName
+        , icPort :: S.PortNumber
+        , icUsername :: UserName
+        , icPasswd :: Password
+        , icSSLWrapPort :: S.PortNumber
+        }
+
+    process_loop processor = forever $ do
+        getNewEmails gmail_conf processor
+
+        threadDelay$ 1000*10000
+
+    getNewEmails conf f = withIMAP conf $ \ic -> do
+        I.select ic "INBOX"
+        uids <- I.search ic [I.UNFLAG I.Seen]
+        mapM_ (get_headers_and_body f ic) uids
+
+    trace_result result = trace (concatMap (\(x, y) -> "first = " ++ (show x) ++ " second = " ++ (show y)) result) result
+
+    get_headers_and_body f ic uid = do
+        result        <- trace_result <$> I.fetchByString ic uid "body[text]"
+        let body         = snd . head . filter (flip isInfixOf "BODY[TEXT]" . fst) $ result
+
+        fields        <- I.fetchByString ic uid "BODY[HEADER.FIELDS (To)]"
+
+        f (body, fields)
+
+
+    withIMAP :: IMAPConf -> (I.IMAPConnection Handle -> IO a) -> IO ()
+    withIMAP c action = do
+      -- launch thread for wrapping tcp with SSL
+      putStrLn$ "Connecting to "++icHostname c++":"++show (icPort c)++" (wrapping with ssl through localhost:"++show (icSSLWrapPort c)++") ..."
+      ic <- connectIMAPPort "localhost" (icSSLWrapPort c)
+      putStrLn$ "Authenticating user "++icUsername c++" ..."
+      I.login ic (icUsername c) (icPasswd c)
+      action ic
+      close ic
+      return ()
+    
+    
 
 
 

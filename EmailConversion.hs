@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, NoMonomorphismRestriction #-}
 module EmailConversion where
     
 import BetCommands
@@ -7,6 +7,25 @@ import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LT
 import qualified Data.Text as T
 import qualified Data.ByteString as BS
+import EmailParser
+import Control.Monad
+import Control.Monad.Maybe
+import Data.List
+import Data.List.Split
+import qualified Data.HashMap.Strict as H
+import Control.Monad.State
+import Data.Maybe
+import Safe
+
+{-
+instance Monad m => MonadPlus (MaybeT m) where
+  mzero = MaybeT $ return Nothing
+  mplus x y = MaybeT $ do
+    mx <- runMaybeT x
+    case mx of
+      Nothing -> runMaybeT y
+      Just _  -> return mx
+-}
 
 --todo Create a google apps account with a catch all email account
 
@@ -53,7 +72,7 @@ make_create_address = Address (Just "BetYah") "create@jonathanfischoff.com"
 simple_mail address to message = Mail address 
         [Address Nothing (T.pack to)] [] [] [] [simple_message message]
 
-to_email :: Env -> OutgoingPayload -> Mail
+to_email :: BetEnv -> OutgoingPayload -> Mail
 to_email env (OutgoingPayload to (SendBet body from)) = 
     simple_mail (make_address_accept $ bet_id $ bet env) to $ to_bet_message from body
 to_email env (OutgoingPayload to (ParticipantAccepted user)) =
@@ -64,11 +83,115 @@ to_email env (OutgoingPayload to (ParticipantCompleted user position)) =
 to_email env (OutgoingPayload to (Resolution result)) = simple_mail make_create_address to $ resolution_message (body $ bet env) result
 to_email env (OutgoingPayload to CompleteInstructions) = simple_mail (make_address_complete $ bet_id $ bet env) to $
     complete_message (bet env)
+
+fromRight (Right x) = x
+
+get_from = T.unpack . addressEmail . mailFrom
+get_to   = T.unpack . addressEmail . head . mailTo
+
+type BetId = Int
+
+type EmailParts = (BS.ByteString, BS.ByteString)
+
+from_many_emails = mapM from_email'
+
+from_email' :: EmailParts -> State Env (BetId, IncomingPayload)
+from_email' email_parts = do
+    value <- runMaybeT . from_email $ email_parts
+    return $ fromJustNote "from_email'" value
+
+from_email :: EmailParts -> MaybeT (State Env) (BetId, IncomingPayload)
+from_email email_parts = do
+    let email = parse_email email_parts 
+
+    command <- MaybeT $ return $ to_command email
     
-from_email :: BS.ByteString -> IncomingPayload
-from_email email = result where
-    result = ac "from"
-    --I think the only ones that matter are create and complete
-    --basically look at the email address
-    --if it is create use the body to make a new bet
-    --if it is complete look at the subject
+    let payload = IncomingPayload (get_from email) command
+    bet_id <- get_or_add_bet_id $ get_to email
+    
+    return  $ (bet_id, payload)
+
+call x f = f x
+    
+to_command :: Mail -> Maybe Command
+to_command email = msum $ map (call email) [parse_create, parse_accepted, parse_complete]
+
+is_infix_of_email_address subset email = isInfixOf (get_from email) subset
+
+is_create_address = is_infix_of_email_address "create"
+    
+parse_create email = do
+    guard(is_create_address email)
+    emails   <- parse_competitors email
+    bet_body <- parse_bet_body email
+    return $ Create bet_body emails
+    
+parse_bet_body email = error "parse_bet_body"
+    
+parse_competitors email = do
+    emails_from_cc   <- parse_emails_from_address $ mailCc email
+    emails_from_bcc  <- parse_emails_from_address $ mailBcc email
+    emails_from_body <- parse_emails_from_body (email_body email)
+    return $ concat [emails_from_cc, emails_from_bcc, emails_from_body]
+    
+parse_emails_from_address addresses = error "parse_emails_from_address"
+parse_emails_from_body addresses = error "parse_emails_from_body"
+
+email_body email = error "email_body"
+    
+is_accepted_address = is_infix_of_email_address "accept"
+
+parse_accepted email = do
+    guard(is_accepted_address email)
+    return Accepted
+
+is_complete_email = is_infix_of_email_address "complete"
+
+parse_complete email = do
+    guard(is_complete_email email)
+    position <- parse_position email
+    return $ Complete position
+    
+parse_position email = error "parse_position"
+
+--I think the only ones that matter are create and complete
+--basically look at the email address
+--if it is create use the body to make a new bet
+--if it is complete look at the subject
+    
+get_or_add_bet_id :: String -> MaybeT (State Env) Int
+get_or_add_bet_id to = get_bet_id to `mplus ` (MaybeT create_bet_id)
+
+is_to_create = error "is_to_create"
+
+--get_bet_id :: String -> Maybe Int
+get_bet_id to = do 
+    guard(is_to_create to)
+    return . read . head . tail . splitOn "_" $ to
+    
+
+create_bet_id :: State Env (Maybe Int)
+create_bet_id = gets (Just . maximum . H.keys)
+    
+    
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        

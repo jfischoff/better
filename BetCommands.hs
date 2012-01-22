@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 module BetCommands where
 import Data.Maybe
 import Network.Mail.Mime
@@ -5,6 +6,8 @@ import qualified Data.HashMap.Strict as H
 import Control.Monad.State
 import Data.IORef
 import Control.Applicative
+import qualified Data.HashMap.Strict as H
+import Safe
     
 type Email = String    
 type Emails = [Email]
@@ -72,7 +75,7 @@ data Bet = Bet
     }
     deriving(Show, Eq)
              
-data Env = Env
+data BetEnv = BetEnv
     {
         incoming_payloads :: [IncomingPayload],
         response_queue    :: [OutgoingPayload],
@@ -81,6 +84,8 @@ data Env = Env
         bet               :: Bet
     }
     deriving(Show, Eq)
+
+type Env = H.HashMap Int BetEnv
 
 
 is_create (Create _ _) = True
@@ -97,7 +102,7 @@ get_bet_body env = do
 
 create_forward_notify notify from = OutgoingPayload notify (ParticipantAccepted from)
 
-response :: Env -> IncomingPayload -> [OutgoingPayload]
+response :: BetEnv -> IncomingPayload -> [OutgoingPayload]
 response env   (IncomingPayload from (Create body emails)) = map (create_send_bet from body) emails 
 response env i@(IncomingPayload from (Complete position))  = map (\x -> OutgoingPayload x (ParticipantCompleted from position)) $ get_notifiers env i
 response env i@(IncomingPayload from Accepted)             = (OutgoingPayload from CompleteInstructions):
@@ -121,9 +126,9 @@ get_all_users env = H.keys $ user_positions env
 get_all_positions env = H.elems $ user_positions env
 
 get_resolution env = if is_resolved env
-                        then if all (isFor . fromJust) $ get_all_positions env
+                        then if all (isFor . fromJustNote "get_resolution 0") $ get_all_positions env
                                 then PDecided For
-                                else if all (isAgainst . fromJust) $ get_all_positions env
+                                else if all (isAgainst . fromJustNote "get_resolution 1") $ get_all_positions env
                                        then PDecided Against
                                        else PUndecided
                         else PUnresolved
@@ -160,7 +165,7 @@ add_user_and_update env x = result where
     
 set_bet_body env body = env {bet = (bet $ env){ body = body } }
       
-update_env :: Env -> IncomingPayload -> Env
+update_env :: BetEnv -> IncomingPayload -> BetEnv
 update_env env x@(IncomingPayload from (Complete position)) = result where
     responses = response env x
     env' = update_position env from $ Just position
@@ -177,7 +182,7 @@ update_env env x@(IncomingPayload from (Create body _)) = result where
 
 append_incoming_responses env x = env{incoming_payloads = x:(incoming_payloads env)}
 
-process_responses :: Env -> IO ()
+process_responses :: BetEnv -> IO ()
 process_responses env = do
     mapM_ send_response $ response_queue env
      
@@ -190,9 +195,10 @@ to_mail = undefined
 from_mail :: Mail -> IncomingPayload
 from_mail = undefined
 
+type BetEnvState m a = StateT BetEnv m a
 type EnvState m a = StateT Env m a
 
-update :: Monad m => IncomingPayload -> EnvState m ()
+update :: Monad m => IncomingPayload -> BetEnvState m ()
 update incoming = do
     input <- get
     let output = update_env input incoming
@@ -226,7 +232,10 @@ update_loop incoming = do
     persist_outgoing
     return outgoing
 
-start_env =  Env
+start_env :: Env
+start_env = H.empty
+
+start_bet_env =  BetEnv
         {
             incoming_payloads  = [],
             response_queue     = [],
@@ -236,21 +245,41 @@ start_env =  Env
         }
 
 --start :: IO (IncomingPayload -> IO ())
-start = do
+start  = do
     state <- newIORef start_env
     return $ process_input state
 
---process_input :: IORef Env -> IncomingPayload -> IO ()
-process_input ref handle_outgoing incoming = do 
-    env <- readIORef ref
-
-
-    print incoming
-    let (outgoing, new_env) = runState (update_loop incoming) env
-    handle_outgoing new_env outgoing
+process_input ref handle_outgoing handle_incoming email_bytes = do
+    env <- readIORef ref  
     
+    let (outgoing, new_env) = runState (eval_state handle_outgoing (handle_incoming email_bytes)) env
+    handle_outgoing new_env outgoing
+
     writeIORef ref new_env
     return new_env
+    
+eval_state handle_outgoing email_parser = do 
+    id_and_payloads <- email_parser
+    concat <$> mapM handle_incoming id_and_payloads
+
+handle_incoming (bet_id, incoming) = do
+    let updater = if is_create_payload incoming 
+                    then H.insert bet_id start_bet_env   
+                    else id
+
+    modify updater
+    
+    bet_env <- gets (fromJustNote "eval_state" . H.lookup bet_id)
+
+    let (outgoing, new_bet_env) = process_bet_input bet_env incoming
+                    
+    modify (H.insert bet_id new_bet_env)
+    return $ map (\x -> (bet_id, x)) outgoing
+    
+
+--process_bet_input :: Monad m => BetEnv -> IncomingPayload -> m BetEnv
+process_bet_input bet_env incoming = runState (update_loop incoming) bet_env
+
     
 cr from body emails = IncomingPayload from $ Create body emails
 ac from = IncomingPayload from Accepted
