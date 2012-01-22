@@ -98,6 +98,11 @@ is_create _ = False
 
 is_create_payload x = is_create $ command x
 
+is_complete (Complete _) = True
+is_complete _ = False
+
+is_complete_payload x = is_complete $ command x
+
 safeHead xs | length xs > 0 = Just (head xs)
             | otherwise     = Nothing
 
@@ -114,8 +119,13 @@ response env i@(IncomingPayload from Accepted)             = (OutgoingPayload fr
                                                              (map (\x -> OutgoingPayload x (ParticipantAccepted from)) $ get_notifiers env i)
      
 get_notifiers env (IncomingPayload _    (Create _ _))        = []
-get_notifiers env (IncomingPayload from (Complete position)) = filter (from /=) $ get_all_users env
+get_notifiers env (IncomingPayload from (Complete position)) = filter (\x -> from /= x && (not . is_decided_user env $ x)) $ get_all_users env
 get_notifiers env (IncomingPayload _    Accepted)            = [get_owner env]
+
+is_decided_user env x = any (\(IncomingPayload from (Complete pos)) -> x == from) $ filter is_complete_payload $ incoming_payloads env
+
+is_decided (PDecided _) = True
+is_decided _ = False
 
 get_owner env = (\(IncomingPayload from _) -> from) $ head $ 
     filter is_create_payload $ incoming_payloads env

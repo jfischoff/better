@@ -47,7 +47,8 @@ send_and_render env (x, p) = do
 send_email env outgoing = do 
     mapM_ (send_and_render env) outgoing
 
-main = test_main
+--main = test_main
+main = real_main
 
 test_main = do
     processor <- start 

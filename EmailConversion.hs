@@ -63,7 +63,7 @@ user_completed_message env to body user position = user ++ " has just ended the 
     "\n\nrespond to this message with \"Win\" or \"Lost\" in the subject, to let use know " ++ 
     "if you think."
         
-resolution_message body resolution = "The bet:\n\n" ++ body ++ "has is end, " ++
+resolution_message body resolution = "The bet:\n\n" ++ body ++ "\nis over,  " ++
  (decided_message resolution) ++ "\n\nTo create a new bet, replay to this message with bet and CC your friends"
  
 decided_message Undecided = "and it was undecided."
@@ -178,7 +178,7 @@ parse_complete env email = do
 parse_position bet_env email = return $ result where
     from = get_from email
     is_owner' = is_owner bet_env from
-    result = if (subject `isInfixOf` "won")
+    result = if ("won" `isInfixOf` subject)
                     then if is_owner'
                             then For
                             else Against
@@ -194,11 +194,10 @@ get_subject email = snd . head . filter (("Subject"==). fst) $ mailHeaders email
 get_or_add_bet_id :: String -> MaybeT (State Env) Int
 get_or_add_bet_id to = get_bet_id to `mplus` (MaybeT create_bet_id)
 
-is_to_create to = to `isInfixOf` "create" 
 
 --get_bet_id :: String -> Maybe Int
 get_bet_id to = do 
-    guard(is_to_create to)
+    guard((1<).length . splitOn "_" $ to)
     return . read . head . tail . splitOn "_" $ to
     
 
