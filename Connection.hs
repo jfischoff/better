@@ -26,10 +26,13 @@ tag ssl x = do
             
 
 fetch_info ssl uid = do
-    body   <- tag ssl $ BS.concat ["uid fetch ", uid, " body[text]"]
-    
     fields <- tag ssl $ BS.concat ["uid fetch ", uid, 
-        " body[header.fields (to, from, cc, bcc, subject)]"]
+        " body[header.fields (to from cc bcc subject)]"]
+    print uid
+    body <- tag ssl $ BS.concat ["uid fetch ", uid, " body[text]"]
+    print body
+
+    print fields
     return (body, fields)
 
 --main = get_email_info 
@@ -42,12 +45,12 @@ get_email_info ca_cert_filepath host port user password = do
     tag' $ BS.concat ["login ", user, " ", password] 
     tag' "select \"INBOX\""  
     search_results <- tag' "search UNSEEN" 
-    let uids = r search_results_parser search_results
+    let uids = r search_results_parser search_results 
     
     infos <- mapM (fetch_info ssl) $ map BSC.pack uids
     print infos
-    SSL.shutdown ssl SSL.Bidirectional
-    sClose socket
+    SSL.shutdown ssl SSL.Unidirectional
+    --sClose socket
     
     return (infos)
               

@@ -454,6 +454,15 @@ if it is context, what is the graph and what is the
       return ()
     
     
+      headers_parser = do
+          many $ try $ satisfy (not . ('\r'==))
+          permute ((,,,) <$$> try from_parser
+                          <||> try to_parser
+                          <||> try cc_parser
+                          -- <||> try bcc_parser
+                          <||> try subject_parser
+                                       )
+    
 
 
 

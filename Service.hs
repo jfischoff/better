@@ -34,7 +34,6 @@ gmail_conf = IMAPConf "imap.gmail.com" 993
       "default@jonathanfischoff.com" "Easyasabc123"
       "cacert.pem"
     
-
 lookupJust k h = fromJustNote "lookupJust" $ H.lookup k h
 
 send_email env outgoing = do 
