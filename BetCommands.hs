@@ -8,6 +8,9 @@ import Data.IORef
 import Control.Applicative
 import qualified Data.HashMap.Strict as H
 import Safe
+import Debug.Trace
+
+traceIt x = trace (show x) x
     
 type Email = String    
 type Emails = [Email]
@@ -65,7 +68,9 @@ data Response = SendBet String UserId
               | Resolution Result
               deriving(Show, Eq)
 
-create_send_bet from body to = OutgoingPayload to (SendBet body to)
+traceItNote note x = trace (note ++ show x) x
+
+create_send_bet from body to = OutgoingPayload (traceItNote "to in outgoing " to) (SendBet body from)
 
 
 data Bet = Bet
@@ -112,7 +117,8 @@ get_notifiers env (IncomingPayload _    (Create _ _))        = []
 get_notifiers env (IncomingPayload from (Complete position)) = filter (from /=) $ get_all_users env
 get_notifiers env (IncomingPayload _    Accepted)            = [get_owner env]
 
-get_owner env = (\(IncomingPayload from _) -> from) $ head $ filter is_create_payload $ incoming_payloads env
+get_owner env = (\(IncomingPayload from _) -> from) $ head $ 
+    filter is_create_payload $ incoming_payloads env
     
 update_position env user_id position = result where
     positions = user_positions env
@@ -182,18 +188,18 @@ update_env env x@(IncomingPayload from (Create body _)) = result where
 
 append_incoming_responses env x = env{incoming_payloads = x:(incoming_payloads env)}
 
-process_responses :: BetEnv -> IO ()
-process_responses env = do
-    mapM_ send_response $ response_queue env
+--process_responses :: BetEnv -> IO ()
+--process_responses env = do
+--    mapM_ send_response $ response_queue env
      
-send_response :: OutgoingPayload -> IO ()
-send_response payload = renderSendMail $ (to_mail payload)
+--send_response :: OutgoingPayload -> IO ()
+--send_response payload = renderSendMail $ (to_mail payload)
 
-to_mail :: OutgoingPayload -> Mail
-to_mail = undefined
+--to_mail :: OutgoingPayload -> Mailm
+--to_mail = undefined
 
-from_mail :: Mail -> IncomingPayload
-from_mail = undefined
+--from_mail :: Mail -> IncomingPayload
+--from_mail = undefined
 
 type BetEnvState m a = StateT BetEnv m a
 type EnvState m a = StateT Env m a
@@ -235,6 +241,8 @@ update_loop incoming = do
 start_env :: Env
 start_env = H.empty
 
+start_bet = Bet { body = "", bet_id = -1}
+
 start_bet_env =  BetEnv
         {
             incoming_payloads  = [],
@@ -252,29 +260,31 @@ start  = do
 process_input ref handle_outgoing handle_incoming email_bytes = do
     env <- readIORef ref  
     
-    let (outgoing, new_env) = runState (eval_state handle_outgoing (handle_incoming email_bytes)) env
+    let (outgoing, new_env) = runState (eval_state 
+                                   handle_outgoing (handle_incoming email_bytes)) env
     handle_outgoing new_env outgoing
 
     writeIORef ref new_env
     return new_env
     
+    
 eval_state handle_outgoing email_parser = do 
     id_and_payloads <- email_parser
     concat <$> mapM handle_incoming id_and_payloads
 
-handle_incoming (bet_id, incoming) = do
+handle_incoming (bet_id', incoming) = do
     let updater = if is_create_payload incoming 
-                    then H.insert bet_id start_bet_env   
+                    then H.insert bet_id' (start_bet_env{bet = (start_bet{bet_id = bet_id'})})   
                     else id
 
     modify updater
     
-    bet_env <- gets (fromJustNote "eval_state" . H.lookup bet_id)
+    bet_env <- gets (fromJustNote "eval_state" . H.lookup bet_id')
 
     let (outgoing, new_bet_env) = process_bet_input bet_env incoming
                     
-    modify (H.insert bet_id new_bet_env)
-    return $ map (\x -> (bet_id, x)) outgoing
+    modify (H.insert bet_id' new_bet_env)
+    return $ map (\x -> (bet_id', x)) outgoing
     
 
 --process_bet_input :: Monad m => BetEnv -> IncomingPayload -> m BetEnv

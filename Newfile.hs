@@ -173,11 +173,11 @@ process_responses env = do
 send_response :: OutgoingPayload -> IO ()
 send_response payload = renderSendMail $ (to_mail payload)
 
-to_mail :: OutgoingPayload -> Mail
-to_mail = undefined
+--to_mail :: OutgoingPayload -> Mail
+--to_mail = undefined
 
-from_mail :: Mail -> IncomingPayload
-from_mail = undefined
+--from_mail :: Mail -> IncomingPayload
+--from_mail = undefined
 
 --TODO
 --Rewrite with state and a mutable reference

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings, NoMonomorphismRestriction #-}
 module EmailConversion where
     
-import BetCommands
+import BetCommands hiding (traceIt)
 import Network.Mail.Mime
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LT
@@ -10,12 +10,16 @@ import qualified Data.ByteString as BS
 import EmailParser
 import Control.Monad
 import Control.Monad.Maybe
+import qualified Data.ByteString.Char8 as BSC
+import qualified Data.ByteString.Lazy.Char8 as BSCL
 import Data.List
 import Data.List.Split
 import qualified Data.HashMap.Strict as H
 import Control.Monad.State
 import Data.Maybe
 import Safe
+import Data.Char
+import Debug.Trace
 
 {-
 instance Monad m => MonadPlus (MaybeT m) where
@@ -38,10 +42,12 @@ make_address_complete bet_id = Address (Just "BetYah") $
 simple_message text = [Part "text/plain; charset=utf-8" QuotedPrintableText Nothing []
             $ LT.encodeUtf8 $ LT.pack text]
             
-to_bet_message body from = "You've just got bet! " ++ from ++ " has challenged you with the following:\n" ++
+to_bet_message from body = "You've just got bet! " ++ from ++ 
+    " has challenged you with the following:\n" ++
     body ++ "\n\nTo accept this bet, simply reply to this message." 
     
-user_accepted_message body user = "Its on. " ++ user ++ " just took on the bet:\n\n" ++ body ++ "\n\n" ++
+user_accepted_message body user = "Its on. " ++ user ++ " just took on the bet:\n\n" ++ body ++ 
+    "\n\n" ++
     "When the bet is finished reply to this message with \"I Won\" or \"I Lost\" in the subject."
   
 position_message env to user position = if is_owner env to
@@ -87,7 +93,7 @@ to_email env (OutgoingPayload to CompleteInstructions) = simple_mail (make_addre
 fromRight (Right x) = x
 
 get_from = T.unpack . addressEmail . mailFrom
-get_to   = T.unpack . addressEmail . head . mailTo
+get_to   = T.unpack . addressEmail . headNote "get_to" . mailTo
 
 type BetId = Int
 
@@ -100,44 +106,61 @@ from_email' email_parts = do
     value <- runMaybeT . from_email $ email_parts
     return $ fromJustNote "from_email'" value
 
+--traceIt x = trace (show x) x
+
+env_or_default bet_id h = result where
+    first = H.lookup (traceIt bet_id) h
+    result = case first of 
+                (Just x) -> Just x
+                Nothing -> Just start_bet_env
+
+
+
 from_email :: EmailParts -> MaybeT (State Env) (BetId, IncomingPayload)
 from_email email_parts = do
-    let email = parse_email email_parts 
+    let email = traceIt $ parse_email email_parts 
 
-    command <- MaybeT $ return $ to_command email
+    bet_id <- get_or_add_bet_id $ traceIt $ get_to email
     
-    let payload = IncomingPayload (get_from email) command
-    bet_id <- get_or_add_bet_id $ get_to email
+    bet_env <- MaybeT $ gets (env_or_default (traceIt bet_id))  
+                            
+    command <- MaybeT $ return $ to_command (traceIt bet_env) $ trace "hey" email 
+    
+    let payload = IncomingPayload (traceItNote "from!!!! " $ get_from email) (traceIt command)
     
     return  $ (bet_id, payload)
 
 call x f = f x
     
-to_command :: Mail -> Maybe Command
-to_command email = msum $ map (call email) [parse_create, parse_accepted, parse_complete]
+to_command :: BetEnv -> Mail -> Maybe Command
+to_command env email = msum $ map (call email) [parse_create, parse_accepted, 
+    parse_complete env]
 
-is_infix_of_email_address subset email = isInfixOf (get_from email) subset
+is_infix_of_email_address subset email = isInfixOf subset (get_to email)
 
-is_create_address = is_infix_of_email_address "create"
+is_create_address = traceIt . is_infix_of_email_address "create"
     
 parse_create email = do
     guard(is_create_address email)
-    emails   <- parse_competitors email
+    let emails = parse_competitors email
     bet_body <- parse_bet_body email
     return $ Create bet_body emails
     
-parse_bet_body email = error "parse_bet_body"
+    
+parse_bet_body email = return . BSCL.unpack . partContent . headNote "parse_bet_body 1" . 
+    headNote "parse_bet_body 0" . mailParts $ email
     
 parse_competitors email = do
-    emails_from_cc   <- parse_emails_from_address $ mailCc email
-    emails_from_bcc  <- parse_emails_from_address $ mailBcc email
-    emails_from_body <- parse_emails_from_body (email_body email)
-    return $ concat [emails_from_cc, emails_from_bcc, emails_from_body]
+    let emails_from_cc   = parse_emails_from_address $ mailCc email
+    let emails_from_bcc  = parse_emails_from_address $ mailBcc email
+    let emails_from_body = parse_emails_from_body (email_body email)
+    return $ (concat.concat) [emails_from_cc, emails_from_bcc, emails_from_body]
     
-parse_emails_from_address addresses = error "parse_emails_from_address"
-parse_emails_from_body addresses = error "parse_emails_from_body"
+parse_emails_from_address addresses = map (\(Address _ x) -> T.unpack x) addresses 
+parse_emails_from_body addresses = []
 
-email_body email = error "email_body"
+email_body email = BSCL.unpack . partContent . headNote "email_body 1" . 
+    headNote "email_body 0" . mailParts $ email
     
 is_accepted_address = is_infix_of_email_address "accept"
 
@@ -147,22 +170,31 @@ parse_accepted email = do
 
 is_complete_email = is_infix_of_email_address "complete"
 
-parse_complete email = do
+parse_complete env email = do
     guard(is_complete_email email)
-    position <- parse_position email
+    position <- parse_position env email
     return $ Complete position
     
-parse_position email = error "parse_position"
-
---I think the only ones that matter are create and complete
---basically look at the email address
---if it is create use the body to make a new bet
---if it is complete look at the subject
+parse_position bet_env email = return $ result where
+    from = get_from email
+    is_owner' = is_owner bet_env from
+    result = if (subject `isInfixOf` "won")
+                    then if is_owner'
+                            then For
+                            else Against
+                    else if is_owner'
+                            then Against
+                            else For
+                
+    subject = map toLower $ T.unpack $ get_subject email
+    
+get_subject email = snd . head . filter (("Subject"==). fst) $ mailHeaders email
+    
     
 get_or_add_bet_id :: String -> MaybeT (State Env) Int
-get_or_add_bet_id to = get_bet_id to `mplus ` (MaybeT create_bet_id)
+get_or_add_bet_id to = get_bet_id to `mplus` (MaybeT create_bet_id)
 
-is_to_create = error "is_to_create"
+is_to_create to = to `isInfixOf` "create" 
 
 --get_bet_id :: String -> Maybe Int
 get_bet_id to = do 
@@ -171,8 +203,13 @@ get_bet_id to = do
     
 
 create_bet_id :: State Env (Maybe Int)
-create_bet_id = gets (Just . maximum . H.keys)
+create_bet_id = gets (Just . maximum . (0:) . H.keys) 
     
+    
+test_input = [("* 22 FETCH (UID 48 FLAGS (\\Seen) BODY[TEXT] {29}\r\nGhhf\r\n\r\nSent from my iPhone\r\n)\r\n","* 22 FETCH (UID 48 BODY[HEADER.FIELDS (to from cc bcc subject)] {134}\r\nSubject: Test\r\nFrom: Jonathan Fischoff <jonathangfischoff@gmail.com>\r\nCc: me@jonathanfischoff.com\r\nTo: create@jonathanfischoff.com\r\n\r\n)\r\n")]
+    
+--main = do
+--    print $ runState (from_many_emails test_input) start_env
     
         
         

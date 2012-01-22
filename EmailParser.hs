@@ -16,6 +16,7 @@ import qualified Data.Text.Lazy.Encoding as LT
 
 
 from_right (Right x) = x
+from_right (Left x)  = error $ show x
 
 --try a new way
 --make the different parser options that
@@ -38,6 +39,14 @@ test_headers = BS.concat ["* 20 FETCH (UID 23 BODY[HEADER.FIELDS (to from cc bcc
                " {109}\r\nSubject: Fwd: Bet\r\nFrom: Jonathan Fischoff <jonath", 
                "angfischoff@gmail.com>\r\nTo: create@jonathanfischoff.com\r\n\r\n)\r\n"]
                
+test_headers_1 = BS.concat ["* 22 FETCH (UID 48 BODY[HEADER.FIELDS (to from cc bcc subject)]",
+    " {134}\r\nSubject: Test\r\nFrom: Jonathan Fischoff <jonathangfischoff@gmail.com>\r\nCc:",
+    " me@jonathanfischoff.com\r\nTo: create@jonathanfischoff.com\r\n\r\n)\r\n"]
+    
+test_headers_2 = BS.concat ["* 24 FETCH (UID 50 BODY[HEADER.FIELDS (to from cc bcc subject)] ",
+        "{133}\r\nSubject: Ghc\r\nFrom: Jonathan Fischoff <jonathangfischoff@gmail.com>\r\nCc: ",
+        "me@jonathanfischoff.com\r\nTo: create@jonathanfischoff.com\r\n\r\n)\r\n"]
+               
 test_body = BS.concat ["* 1 FETCH (UID 27 BODY[TEXT] {35}\r\n\r\nParse this",
     "\r\nSent from my iPhone\r\n)\r\n"]
     
@@ -58,9 +67,9 @@ parse_email (body_bytes, header_bytes) = result where
     
     
 unpack_fields mail (S subject) = mail{mailHeaders = (BSC.pack "Subject", T.pack subject):(mailHeaders mail)}
-unpack_fields mail (T to)      = mail{mailTo = to}
-unpack_fields mail (B bcc)     = mail{mailBcc = bcc}
-unpack_fields mail (C cc)      = mail{mailCc = cc}
+unpack_fields mail (T to)      = mail{mailTo = to ++ (mailTo mail)}
+unpack_fields mail (B bcc)     = mail{mailBcc = bcc ++ (mailBcc mail)}
+unpack_fields mail (C cc)      = mail{mailCc = cc ++ (mailCc mail)}
 unpack_fields mail (F from)    = mail{mailFrom = from}
 unpack_fields mail (Nil)       = mail
 
@@ -74,8 +83,8 @@ headers_parser = do
     
     
 field_parser =  try subject_parser
-            <|> try to_parser
             <|> try from_parser
+            <|> try to_parser
             <|> try cc_parser
             <|> try bcc_parser  
             <|> nil_parser          
@@ -90,7 +99,7 @@ address_parser = try name_and_address_parser
 traceIt x = trace (show x) x
               
 email_address = do
-    user   <- many1 $ try $ satisfy (not . ('@'==))
+    user   <- many1 $ try $ satisfy (\x -> not $ (any (x==) ['@', '\r', '\n']))
     at     <- char '@'
     domain <- many1 $ try $ satisfy (not . ('\r'==))
     return (user ++ (at:domain))
@@ -120,8 +129,8 @@ many_address_parser label c = do
     c <$> many (try address_parser)
 
 to_parser  = many1_address_parser "To: "  T
-cc_parser  = many_address_parser  "CC: "  C
-bcc_parser = many_address_parser  "BCC: " B
+cc_parser  = many_address_parser  "Cc: "  C
+bcc_parser = many_address_parser  "Bcc: " B
 
 
 subject_parser = do
@@ -133,17 +142,24 @@ subject_parser = do
     
 r p byte_string = from_right $ runP p () "" byte_string
 
-test_headers_parser = runP headers_parser () "" test_headers
+test_headers_parser = runP headers_parser () "" test_headers_2
 
 test_cc_parser  = runP cc_parser () "" cc_test
+
+test_to_parser  = runP (many field_parser) () "" $
+    concat ["\r\nSubject: Test\r\nFrom: Jonathan Fischoff <jonathangfischoff@gmail.com>",
+     "\r\nCc: me@jonathanfischoff.com\r\nTo: create@jonathanfischoff.com\r\n\r\n)\r\n"]
 
 test_body_parser = runP body_parser () "" test_body
 
 instance Show Address where
-    show (Address x y) = show x ++ show y
+    show (Address x y) = show x ++ " " ++ show y
     
 instance Show Part where
     show (Part x y z w u) = concat [show x,
         show z, show w, show u]
+        
+instance Show Mail where
+    show (Mail a b c d e f) = concat [show a, show b, show c, show d, show e, show f]
     
     

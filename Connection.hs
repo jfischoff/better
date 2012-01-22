@@ -26,17 +26,19 @@ tag ssl x = do
             
 
 fetch_info ssl uid = do
+    body <- tag ssl $ BS.concat ["uid fetch ", uid, " BODY[TEXT]"]
+    tag ssl $ BS.concat ["uid fetch ", uid, 
+        " body[header.fields (to from cc bcc subject)]"]
     fields <- tag ssl $ BS.concat ["uid fetch ", uid, 
         " body[header.fields (to from cc bcc subject)]"]
-    print uid
-    body <- tag ssl $ BS.concat ["uid fetch ", uid, " body[text]"]
-    print body
 
+    print body
     print fields
     return (body, fields)
 
---main = get_email_info 
-    
+--main = get_email_info "cacert.pem" "imap.gmail.com" 993
+--          "default@jonathanfischoff.com" "Easyasabc123"
+          
     
 get_email_info ca_cert_filepath host port user password = do    
     (ssl, socket) <- secure_connection ca_cert_filepath host port
